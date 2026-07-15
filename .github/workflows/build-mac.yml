@@ -1,0 +1,112 @@
+name: Build Crate for macOS (Apple Silicon)
+
+# Builds Crate.app on a real Apple Silicon Mac (no Mac needed on your end),
+# smoke-tests it, and uploads the finished app as a downloadable artifact.
+# Run it from the repo's "Actions" tab -> this workflow -> "Run workflow".
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main, master ]
+
+jobs:
+  build:
+    runs-on: macos-14          # Apple Silicon (arm64)
+    timeout-minutes: 40
+
+    steps:
+      - name: Check out the code
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11 (arm64)
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install flask requests "playwright>=1.44" pymupdf waitress pillow pyinstaller
+
+      - name: Fetch macOS yt-dlp + ffmpeg (arm64, static)
+        run: |
+          set -e
+          mkdir -p build_tools/bin_mac
+          echo "yt-dlp (standalone macOS build)…"
+          curl -L -o build_tools/bin_mac/yt-dlp \
+            "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
+          chmod +x build_tools/bin_mac/yt-dlp
+          echo "ffmpeg (static darwin-arm64, latest ffmpeg-static release)…"
+          FURL=$(curl -s "https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest" \
+            | python3 -c "import sys,json;print(next(a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name']=='ffmpeg-darwin-arm64'))")
+          echo "  -> $FURL"
+          curl -L -o build_tools/bin_mac/ffmpeg "$FURL"
+          chmod +x build_tools/bin_mac/ffmpeg
+          echo "sanity:"; ./build_tools/bin_mac/yt-dlp --version
+          ./build_tools/bin_mac/ffmpeg -hide_banner -version | head -1
+          ./build_tools/bin_mac/ffmpeg -hide_banner -version | grep -q enable-libx264 && echo "libx264: yes" || echo "WARNING: no libx264"
+
+      - name: Generate app icon (.icns)
+        run: |
+          set -e
+          mkdir -p crate.iconset
+          sips -z 16 16     crate.png --out crate.iconset/icon_16x16.png
+          sips -z 32 32     crate.png --out crate.iconset/icon_16x16@2x.png
+          sips -z 32 32     crate.png --out crate.iconset/icon_32x32.png
+          sips -z 64 64     crate.png --out crate.iconset/icon_32x32@2x.png
+          sips -z 128 128   crate.png --out crate.iconset/icon_128x128.png
+          sips -z 256 256   crate.png --out crate.iconset/icon_128x128@2x.png
+          sips -z 256 256   crate.png --out crate.iconset/icon_256x256.png
+          sips -z 512 512   crate.png --out crate.iconset/icon_256x256@2x.png
+          sips -z 512 512   crate.png --out crate.iconset/icon_512x512.png
+          cp crate.png      crate.iconset/icon_512x512@2x.png
+          iconutil -c icns crate.iconset -o crate.icns
+
+      - name: Build Crate.app
+        run: |
+          pyinstaller crate.mac.spec --noconfirm --distpath dist --workpath pyi_work
+
+      - name: Ad-hoc code-sign (reduces Gatekeeper friction)
+        run: |
+          codesign --force --deep --sign - dist/Crate.app || true
+          codesign --verify --deep --strict dist/Crate.app && echo "signature ok" || echo "verify was fussy (ad-hoc) — continuing"
+
+      - name: Smoke test the built app (image + clip + article)
+        run: |
+          set -e
+          APP="dist/Crate.app/Contents/MacOS/Crate"
+          export CRATE_PORT=5119
+          export CRATE_DATA_DIR="$RUNNER_TEMP/cdata"
+          export CRATE_DEST="$RUNNER_TEMP/cdl"
+          export BROWSER="echo"     # neutralize webbrowser.open on the headless runner
+
+          echo "== install the browser engine (as the installer would) =="
+          "$APP" --install-browsers
+
+          echo "== launch the app =="
+          "$APP" &
+          APP_PID=$!
+          for i in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:5119/api/state" >/dev/null 2>&1; then break; fi
+            sleep 0.5
+          done
+          curl -fsS "http://127.0.0.1:5119/api/state" >/dev/null || { echo "server never came up"; exit 1; }
+
+          echo "== queue an image, a clipped video, and an article =="
+          python3 build_tools/mac_smoke.py
+
+          kill $APP_PID 2>/dev/null || true
+          echo "== files produced =="
+          find "$CRATE_DEST" -type f
+
+      - name: Package Crate.app into a zip
+        run: |
+          ditto -c -k --keepParent "dist/Crate.app" "Crate-macOS-arm64.zip"
+          ls -la Crate-macOS-arm64.zip
+
+      - name: Upload the app as an artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Crate-macOS-arm64
+          path: Crate-macOS-arm64.zip
+          if-no-files-found: error
