@@ -37,11 +37,7 @@ jobs:
             "https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_macos"
           chmod +x build_tools/bin_mac/yt-dlp
           echo "ffmpeg (static darwin-arm64, latest ffmpeg-static release)…"
-          FURL=$(curl -s "https://api.github.com/repos/eugeneware/ffmpeg-static/releases/latest" \
-            | python3 -c "import sys,json;print(next(a['browser_download_url'] for a in json.load(sys.stdin)['assets'] if a['name']=='ffmpeg-darwin-arm64'))")
-          echo "  -> $FURL"
-          curl -L -o build_tools/bin_mac/ffmpeg "$FURL"
-          chmod +x build_tools/bin_mac/ffmpeg
+          python3 build_tools/fetch_mac_ffmpeg.py
           echo "sanity:"; ./build_tools/bin_mac/yt-dlp --version
           ./build_tools/bin_mac/ffmpeg -hide_banner -version | head -1
           ./build_tools/bin_mac/ffmpeg -hide_banner -version | grep -q enable-libx264 && echo "libx264: yes" || echo "WARNING: no libx264"
