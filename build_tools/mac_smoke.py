@@ -26,9 +26,17 @@ def main():
     box = post("/api/boxes", {})
     bid = box["id"]
     post(f"/api/boxes/{bid}", {"title": "CI Smoke"})
+    # Deliberately NOT Wikimedia or YouTube here: both actively throttle/block
+    # GitHub Actions' shared datacenter IPs (429s from Wikimedia, "confirm
+    # you're not a bot" from YouTube) regardless of how well-behaved the
+    # client is — that's a property of the CI network, not of Crate's code.
+    # These two instead exercise the identical download paths (direct image
+    # fetch; yt-dlp+ffmpeg clip-and-reencode) against hosts that don't
+    # specially penalize cloud IPs, so the test verifies packaging, not
+    # today's mood of a third-party anti-bot system.
     links = "\n".join([
-        "https://commons.wikimedia.org/wiki/File:Chicken_eggs.jpg | Eggs",
-        "https://www.youtube.com/watch?v=suXj_rgWHE8 @0:03-0:08 | Clip",
+        "https://picsum.photos/id/1015/1600/1200.jpg | Eggs",
+        "https://www.w3schools.com/html/mov_bbb.mp4 @0:00-0:02 | Clip",
         "https://en.wikipedia.org/wiki/Egg_as_food | Article",
     ])
     post(f"/api/boxes/{bid}", {"links_raw": links})
