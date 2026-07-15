@@ -18,6 +18,7 @@ import re
 import sys
 import gzip
 import stat
+import urllib.error
 import urllib.request
 
 REPO = "eugeneware/ffmpeg-static"
@@ -31,11 +32,23 @@ CANDIDATE_RE = re.compile(r"darwin.*arm64|arm64.*darwin", re.I)
 EXCLUDE_RE = re.compile(r"license|readme|\.txt$|\.md$|\.sha\d*$", re.I)
 
 
+def _headers(extra=None):
+    h = {"User-Agent": "crate-build-script"}
+    # GITHUB_TOKEN is provided automatically in every Actions run. Authenticated
+    # requests to api.github.com get a 1,000/hour-per-repo quota instead of the
+    # unauthenticated 60/hour-per-IP quota — and that IP is shared by every
+    # other Actions job running anywhere in the world at that moment, so the
+    # unauthenticated quota can already be exhausted before we ever ask.
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        h["Authorization"] = f"Bearer {token}"
+    if extra:
+        h.update(extra)
+    return h
+
+
 def fetch_json(url):
-    req = urllib.request.Request(url, headers={
-        "User-Agent": "crate-build-script",
-        "Accept": "application/vnd.github+json",
-    })
+    req = urllib.request.Request(url, headers=_headers({"Accept": "application/vnd.github+json"}))
     import json
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.load(r)
@@ -44,7 +57,16 @@ def fetch_json(url):
 def main():
     os.makedirs(OUT_DIR, exist_ok=True)
     print(f"Querying {API} ...")
-    data = fetch_json(API)
+    print(f"(authenticated: {'yes' if (os.environ.get('GITHUB_TOKEN') or os.environ.get('GH_TOKEN')) else 'NO — GITHUB_TOKEN not set, subject to the tight unauthenticated rate limit'})")
+    try:
+        data = fetch_json(API)
+    except urllib.error.HTTPError as e:
+        if e.code == 403:
+            print("\nERROR: HTTP 403 from api.github.com — almost always the unauthenticated")
+            print("rate limit (60 requests/hour, shared by every Actions runner IP worldwide).")
+            print("Fix: make sure the workflow step passes GITHUB_TOKEN, e.g.:")
+            print("  env:\n    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}")
+        raise
     assets = data.get("assets") or []
     if not assets:
         print("ERROR: latest release has no assets at all.")
@@ -70,7 +92,7 @@ def main():
 
     url = match["browser_download_url"]
     print(f"\nDownloading: {match['name']}  <-  {url}")
-    req = urllib.request.Request(url, headers={"User-Agent": "crate-build-script"})
+    req = urllib.request.Request(url, headers=_headers())
     with urllib.request.urlopen(req, timeout=120) as r:
         raw = r.read()
 
