@@ -28,7 +28,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install flask requests "playwright>=1.44" pymupdf waitress pillow pyinstaller
 
-      - name: Fetch macOS yt-dlp + ffmpeg (arm64, static)
+      -       - name: Fetch macOS yt-dlp + ffmpeg (arm64, static)
+        env:
+          # Authenticates the api.github.com lookup in fetch_mac_ffmpeg.py so
+          # it gets the 1,000/hour-per-repo quota instead of the 60/hour quota
+          # shared by every Actions runner IP on the planet. Auto-provided by
+          # GitHub for every workflow run — nothing to configure.
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -e
           mkdir -p build_tools/bin_mac
